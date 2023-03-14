@@ -2,9 +2,9 @@ const express = require('express');
 const passport = require('passport');
 const cookieSession = require('cookie-session');
 const multer = require('multer');
-require('./passportSetup');
 const fs = require('fs');
 const path = require('path');
+
 
 const cors = require('cors');
 
@@ -19,16 +19,8 @@ app.use(cookieSession({
   keys: ['key1', 'key2']
 }))
 
-const isLoggedIn = (req, res, next) => {
-    if (req.user) {
-        next();
-    } else {
-        res.sendStatus(401);
-    }
-}
-
-app.use(passport.initialize());
-app.use(passport.session());
+const cookieParser = require('cookie-parser');
+app.use(cookieParser());
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -53,94 +45,47 @@ const upload = multer({ storage: storage });
 
 const port = process.env.PORT || 5000
 
-app.get("/", (req, res) => {
-    res.json({message: "You are not logged in"})
-})
-
-app.get("/failed", (req, res) => {
-    res.send("Failed")
-})
-app.get("/success",isLoggedIn, (req, res) => {
-    // Check if user is authenticated
-    if (req.isAuthenticated()) {
-      res.send(`
-        <p>Welcome ${req.user.displayName}!</p>
-        <form action="/upload" method="post" enctype="multipart/form-data">
-          <input type="file" name="file" required="true">
-          <button type="submit">Upload File</button>
-        </form>
-        <form action="/files" method="get" enctype="multipart/form-data">
-          <button type="submit">All Files</button>
-        </form>
-        <a href="/logout">Logout</a>
-      `);
-     } else {
-      res.send(`
-        <p>Please <a href="/auth/google">sign in with Google</a>.</p>
-      `);
+//middleware
+const authMiddleware = async (req, res, next) => {
+  try {
+    const sessionCookie = req.cookies['google-auth-session'];
+    if (!sessionCookie) {
+      res.status(401).send('Unauthorized');
     }
-})
+    next();
+  } catch (error) {
+    console.error(error);
+    res.status(401).send('Unauthorized');
+  }
+};
 
-
-app.get('/auth/google',
-    passport.authenticate('google', {
-            scope:
-                ['email', 'profile'],prompt: 'select_account'
-        }
-    ));
-
-app.get('/auth/google/callback',
-    passport.authenticate('google', {
-        failureRedirect: '/failed',
-    }),
-    function (req, res) {
-        res.redirect('/success')
-
-    }
-);
-
-app.post('/upload',isLoggedIn, upload.single('file'), (req, res) => {
+app.post('/upload',authMiddleware, upload.single('file'), (req, res) => {
     res.json({ message: 'File uploaded successfully' });
 });
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-app.get('/files',isLoggedIn, (req, res) => {
+app.get('/files',authMiddleware, (req, res) => {
     const fileDir = './uploads';
     fs.readdir(fileDir, (err, files) => {
       if (err) {
         console.error(err);
         res.status(500).send('Server error');
       } else {
-        const fileList = files.map(file => ({
+        const fileList = files?.map(file => ({
           name: file,
-          url: `/uploads/${file}`,
+          url: __dirname+`/uploads/${file}`,
         }));
-        const listItems = fileList.map(file => `<li><a href="${file.url}" download onclick="event.stopPropagation();">${file.name}</a></li>`).join('');
 
-        const html = `
-          <!DOCTYPE html>
-          <html>
-            <head>
-              <title>File List</title>
-            </head>
-            <body>
-              <h1>File List</h1>
-              <ul>
-                ${listItems}
-              </ul>
-            </body>
-          </html>
-        `;
-        res.send(html);
+      res.send(fileList);
       }
     });
 });
 
-app.get("/logout", (req, res) => {
-    req.session = null;
-    req.logout();
-    res.redirect('/');
-})
+app.get('/download/:fileName',authMiddleware, (req, res) => {
+    const fileName = req.params.fileName;
+    const filePath = path.join(__dirname, 'uploads', fileName);
+    res.download(filePath);
+});
 
 app.listen(port, () => console.log("server running on port" + port))
